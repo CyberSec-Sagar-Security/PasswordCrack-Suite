@@ -1,0 +1,79 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Application specific
+config.json
+sessions/*.json
+reports/*.json
+reports/*.html
+reports/*.txt
+*.log
+
+# Test coverage
+.coverage
+htmlcov/
+.pytest_cache/
+.tox/
+
+# Distribution / packaging
+*.spec
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# pyenv
+.python-version
+
+# Keep directories but ignore contents
+sessions/*
+!sessions/.gitkeep
+reports/*
+!reports/.gitkeep
+
+# Large wordlist files (SecLists is 2.6GB - users should clone separately)
+examples/SecLists/
+
+# Temporary files
+*.tmp
+*.bak
+*.swp
+~*
