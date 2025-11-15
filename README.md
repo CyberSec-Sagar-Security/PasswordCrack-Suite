@@ -314,12 +314,6 @@ We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guid
 - Maintain ethical standards
 - Keep it educational
 
-## 📞 Support
-
-- **Repository**: [https://github.com/CyberSec-Sagar-Security/PasswordCrack-Suite](https://github.com/CyberSec-Sagar-Security/PasswordCrack-Suite)
-- **Issues**: [Report bugs or request features](https://github.com/CyberSec-Sagar-Security/PasswordCrack-Suite/issues)
-- **Discussions**: [Ask questions or share ideas](https://github.com/CyberSec-Sagar-Security/PasswordCrack-Suite/discussions)
-
 ## 🔧 Technical Details
 
 ### Performance
