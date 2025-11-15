@@ -88,9 +88,11 @@ python -m passwordcrack
 ## 📖 Usage
 
 ### GUI Overview
-<img width="995" height="914" alt="image" src="https://github.com/user-attachments/assets/20ab4cf7-e482-4be0-a178-bea034519652" />
+<img width="998" height="918" alt="image" src="https://github.com/user-attachments/assets/19229f44-7b51-44f9-abfb-67302356ccb2" />
 
-<img width="999" height="910" alt="image" src="https://github.com/user-attachments/assets/354fb9fe-48b0-4443-944c-b7e6208330d3" />
+<img width="992" height="912" alt="image" src="https://github.com/user-attachments/assets/0eb228e6-158d-4e18-97e3-6905b9bb22dd" />
+
+<img width="999" height="921" alt="image" src="https://github.com/user-attachments/assets/a567c96b-c5bc-49d7-8684-71b487561070" />
 
 
 The application has three main tabs:
