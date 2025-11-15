@@ -203,7 +203,7 @@ class PasswordCrackGUI:
             [sg.HorizontalSeparator()],
             [sg.Text("Wordlist (for Dictionary):", size=(25, 1)), 
              sg.Combo([
-                  ' TRY ALL WORDLISTS',
+                 '*** TRY ALL WORDLISTS ***',
                  'wordlists/common.txt',
                  'wordlists/rockyou-lite.txt',
                  'SecLists/Passwords/Common-Credentials/10k-most-common.txt',
