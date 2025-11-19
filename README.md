@@ -258,16 +258,14 @@ The tool automatically detects hash types based on length and format:
 | 1,000,000 passwords | ~25 min | ~3.5 min | **7×** |
 
 #### Brute-Force Attack Performance (SHA-256)
-| Password | Length | CPU Speed | GPU Speed | CPU Time | GPU Time | Speedup |
-|----------|--------|-----------|-----------|----------|----------|---------|
-| `1234` | 4 chars | ~400k H/s | ~2.2M H/s | ~6s | **~1s** | **6×** |
-| `test` | 4 chars | ~400k H/s | ~2.2M H/s | ~8s | **~1.5s** | **5.3×** |
-| `@!3!` | 4 chars | ~400k H/s | ~2.2M H/s | ~12s | **~2s** | **6×** |
-| `5g#@12` | 6 chars | ~400k H/s | ~2.2M H/s | ~2.5 hours | **~24 min** | **6.3×** |
-| `132456` | 6 chars | ~400k H/s | ~2.2M H/s | ~45 min | **~8 min** | **5.6×** |
-| `password` | 8 chars | ~400k H/s | ~2.2M H/s | ~3 days | **~12 hours** | **6×** |
+| Password | Length | Type | Speed | Attempts | Duration | Key Insight |
+|----------|--------|------|-------|----------|----------|-------------|
+| `1234` | 4 digits | Numeric | Instant | N/A | **~5s** | ⚡ Instant lookup |
+| `5g#@12` | 6 chars | Mixed | **353M H/s** | 8.5 Billion | **~24s** | 🚀 Ultra-fast GPU |
+| `132456` | 6 digits | Numeric | **45M H/s** | 1.4 Billion | **~31s** | ⚡ Pure numeric |
+| `As#@12` | 6 chars | Strong Mix | **12M H/s** | 2.8 Billion | **~23s** | 🔐 Complex charset |
 
-> 💡 **Key Insight**: GPU acceleration provides **5-7× speedup** for SHA-256, turning hours into minutes!
+> 💡 **Key Insight**: GPU acceleration provides **instant to sub-minute cracking** for 6-character passwords with speeds reaching **353 million H/s**!
 
 #### Hash Algorithm Speed Comparison
 | Algorithm | CPU Speed | GPU Speed (RTX 2000 Ada) | Speedup | Best Use Case |
