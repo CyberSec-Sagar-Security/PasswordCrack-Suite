@@ -11,10 +11,23 @@ from .mask_engine import MaskEngine
 from .hybrid_engine import HybridEngine
 from .rule_engine import RuleEngine
 
-__all__ = [
-    'DictionaryEngine',
-    'BruteforceEngine',
-    'MaskEngine',
-    'HybridEngine',
-    'RuleEngine',
-]
+# GPU-accelerated engines (optional - requires hashcat)
+try:
+    from .gpx_engine import GPXDictionaryEngine, GPXBruteforceEngine
+    __all__ = [
+        'DictionaryEngine',
+        'BruteforceEngine',
+        'MaskEngine',
+        'HybridEngine',
+        'RuleEngine',
+        'GPXDictionaryEngine',
+        'GPXBruteforceEngine',
+    ]
+except ImportError:
+    __all__ = [
+        'DictionaryEngine',
+        'BruteforceEngine',
+        'MaskEngine',
+        'HybridEngine',
+        'RuleEngine',
+    ]

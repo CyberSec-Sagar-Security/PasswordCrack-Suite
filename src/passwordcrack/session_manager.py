@@ -47,12 +47,20 @@ class SessionManager:
             attack_type: Type of attack (dictionary, bruteforce, etc.)
             algorithm: Hash algorithm
             hash_value: Target hash
-            **kwargs: Additional session parameters
+            **kwargs: Additional session parameters (including GPX settings)
             
         Returns:
             Session ID
         """
         self.session_id = str(uuid.uuid4())
+        
+        # Extract GPX settings from kwargs
+        gpx_settings = {
+            "gpx_enabled": kwargs.pop("gpx_enabled", False),
+            "gpx_devices": kwargs.pop("gpx_devices", []),
+            "gpx_mixed_mode": kwargs.pop("gpx_mixed_mode", True),
+            "gpx_fallback_occurred": False
+        }
         
         self.current_session = {
             "session_id": self.session_id,
@@ -65,6 +73,7 @@ class SessionManager:
             "found": False,
             "password": None,
             "parameters": kwargs,
+            "gpx_settings": gpx_settings,
             "checkpoints": []
         }
         
@@ -169,6 +178,35 @@ class SessionManager:
         }
         
         self.current_session["checkpoints"].append(checkpoint)
+    
+    def record_gpx_fallback(self, reason: str) -> None:
+        """
+        Record that GPX fallback occurred.
+        
+        Args:
+            reason: Reason for fallback
+        """
+        if not self.current_session:
+            raise ValueError("No active session")
+        
+        if "gpx_settings" not in self.current_session:
+            self.current_session["gpx_settings"] = {}
+        
+        self.current_session["gpx_settings"]["gpx_fallback_occurred"] = True
+        self.current_session["gpx_settings"]["fallback_reason"] = reason
+        self.current_session["gpx_settings"]["fallback_timestamp"] = datetime.now().isoformat()
+    
+    def get_gpx_settings(self) -> Dict[str, Any]:
+        """
+        Get GPX settings for current session.
+        
+        Returns:
+            GPX settings dictionary
+        """
+        if not self.current_session:
+            return {}
+        
+        return self.current_session.get("gpx_settings", {})
     
     def get_last_checkpoint(self) -> Optional[Dict[str, Any]]:
         """

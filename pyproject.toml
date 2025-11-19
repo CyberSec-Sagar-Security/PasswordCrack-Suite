@@ -4,22 +4,23 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "passwordcrack-suite"
-version = "1.0.0"
-description = "Educational password cracking suite for security research and training"
+version = "2.1.0"
+description = "Educational password cracking suite with GPU acceleration for security research and training"
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "Educational Use Only - See LICENSE"}
 authors = [
     {name = "CyberSec Sagar Security", email = "security@example.com"}
 ]
-keywords = ["security", "education", "password", "cracking", "research"]
+keywords = ["security", "education", "password", "cracking", "research", "gpu", "hashcat"]
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Education",
     "Topic :: Security",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
 ]
 
 dependencies = [

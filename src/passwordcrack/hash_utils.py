@@ -239,3 +239,41 @@ class HashUtils:
             }
         }
         return info.get(algorithm, {})
+    
+    @staticmethod
+    def validate_hash(hash_value: str, algorithm: HashAlgorithm) -> tuple[bool, str]:
+        """
+        Validate hash format for given algorithm.
+        
+        Args:
+            hash_value: Hash to validate
+            algorithm: Expected algorithm
+            
+        Returns:
+            Tuple of (is_valid, error_message)
+        """
+        hash_value = hash_value.strip()
+        
+        # Define expected lengths
+        expected_lengths = {
+            HashAlgorithm.MD5: 32,
+            HashAlgorithm.SHA1: 40,
+            HashAlgorithm.SHA256: 64,
+            HashAlgorithm.SHA512: 128,
+            HashAlgorithm.NTLM: 32
+        }
+        
+        if algorithm in expected_lengths:
+            expected_len = expected_lengths[algorithm]
+            actual_len = len(hash_value)
+            
+            if actual_len != expected_len:
+                return False, f"{algorithm.value.upper()} hash must be exactly {expected_len} characters (got {actual_len})"
+            
+            # Check if hex
+            try:
+                int(hash_value, 16)
+            except ValueError:
+                return False, f"Hash contains non-hexadecimal characters"
+        
+        return True, ""

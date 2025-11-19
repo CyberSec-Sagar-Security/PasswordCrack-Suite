@@ -20,11 +20,14 @@ from ..hash_utils import HashUtils, HashAlgorithm
 from ..hash_identifier import HashIdentifier
 from ..wordlist_manager import WordlistManager
 from ..attack_engines import DictionaryEngine, BruteforceEngine, MaskEngine, HybridEngine, RuleEngine
+from ..attack_engines.gpx_engine import GPXDictionaryEngine, GPXBruteforceEngine
 from ..session_manager import SessionManager
 from ..results_analyzer import ResultsAnalyzer
 from ..performance.benchmark import PerformanceBenchmark
 from ..security import SecurityManager
 from ..simulator import DemoSimulator
+from ..gpx_manager import GPXManager, DeviceType, DeviceTier
+from ..hashcat_wrapper import HashcatWrapper, HashcatMode
 
 
 class PasswordCrackGUI:
@@ -49,6 +52,32 @@ class PasswordCrackGUI:
         self.results_analyzer = ResultsAnalyzer()
         self.security_manager = SecurityManager()
         self.simulator = DemoSimulator()
+        
+        # Initialize GPX (GPU/CPU acceleration)
+        self.gpx_manager = GPXManager()
+        self.hashcat_wrapper: Optional[HashcatWrapper] = None
+        self.gpx_enabled = False
+        self.gpx_devices_detected = False
+        
+        # Try to initialize GPX
+        try:
+            self.gpx_manager.detect_devices()
+            self.gpx_devices_detected = True
+            
+            # Always create hashcat wrapper (it won't raise error anymore)
+            self.hashcat_wrapper = HashcatWrapper(self.gpx_manager)
+            
+            if self.hashcat_wrapper.hashcat_path:
+                print(f"✅ Hashcat found: {self.hashcat_wrapper.hashcat_path}")
+                if self.gpx_manager.is_gpu_available():
+                    self.gpx_enabled = True  # Default to ON if GPU available
+            else:
+                print(f"⚠️ Hashcat not found - GPU acceleration disabled")
+                
+        except Exception as e:
+            print(f"GPX initialization warning: {e}")
+            import traceback
+            traceback.print_exc()
         
         # Set theme
         sg.theme('DarkBlue3')
@@ -185,6 +214,10 @@ class PasswordCrackGUI:
     def create_main_window(self) -> sg.Window:
         """Create the main application window."""
         
+        # Build GPX device summary
+        gpx_device_text = self.gpx_manager.get_device_summary() if self.gpx_devices_detected else "Scanning devices..."
+        gpx_enabled_default = self.gpx_enabled and self.gpx_manager.is_gpu_available()
+        
         # Main layout with tabs
         tab_new_session = [
             [sg.Text("Create New Cracking Session", font=("Arial", 12, "bold"))],
@@ -196,6 +229,22 @@ class PasswordCrackGUI:
                      default_value='SHA256', key='-ALGO-', size=(20, 1)),
              sg.Button("Auto-Detect", key='-DETECT-'),
              sg.Button("Create Hash", key='-CREATE_HASH-')],
+            [sg.HorizontalSeparator()],
+            [sg.Text("GPU/CPU Acceleration (GPX):", font=("Arial", 10, "bold"))],
+            [sg.Checkbox("Use GPU if available", key='-GPX_ENABLED-', default=gpx_enabled_default,
+                        tooltip="GPX = Use GPU acceleration (OpenCL/CUDA). Falls back to CPU if no GPU found.",
+                        disabled=not self.gpx_manager.is_gpu_available()),
+             sg.Button("Benchmark", key='-BENCHMARK-', size=(12, 1),
+                      tooltip="Run a short benchmark to measure GPU/CPU speed"),
+             sg.Button("Rescan Devices", key='-RESCAN_DEVICES-', size=(12, 1),
+                      tooltip="Re-detect available GPU/CPU devices"),
+             sg.Button("Diagnostics", key='-GPX_DIAGNOSTICS-', size=(12, 1),
+                      tooltip="Show detailed GPU/CPU detection diagnostics")],
+            [sg.Text(gpx_device_text, key='-GPX_DEVICE_INFO-', size=(70, 1), 
+                    text_color='black' if self.gpx_manager.is_gpu_available() else 'gray')],
+            [sg.Text("Estimated Speed: N/A", key='-GPX_SPEED_EST-', size=(70, 1), visible=False)],
+            [sg.Checkbox("Allow CPU + GPU mixed mode", key='-GPX_MIXED-', default=True,
+                        tooltip="Use both CPU and GPU together (if supported by hash algorithm)")],
             [sg.HorizontalSeparator()],
             [sg.Text("Attack Type:", font=("Arial", 10, "bold"))],
             [sg.Radio("Dictionary Attack (Fast - tries common passwords)", "ATTACK", key='-DICT-', default=True)],
@@ -315,6 +364,12 @@ class PasswordCrackGUI:
                 self.handle_hash_detection(window, values)
             elif event == '-CREATE_HASH-':
                 self.show_hash_generator()
+            elif event == '-BENCHMARK-':
+                self.handle_gpx_benchmark(window, values)
+            elif event == '-RESCAN_DEVICES-':
+                self.handle_gpx_rescan(window)
+            elif event == '-GPX_DIAGNOSTICS-':
+                self.handle_gpx_diagnostics(window)
             elif event == 'Start Attack':
                 self.handle_start_attack(window, values)
             elif event == '-STOP-':
@@ -358,14 +413,317 @@ class PasswordCrackGUI:
     def _run_attack(self, hash_value: str, algorithm: HashAlgorithm, attack_type: str, values: Dict) -> None:
         """Run the attack in a background thread."""
         import time
-        import itertools
-        import string
+        
+        # ✅ VALIDATION: Check hash format before starting attack
+        is_valid, error_msg = HashUtils.validate_hash(hash_value, algorithm)
+        if not is_valid:
+            self.terminal_buffer.append(f"❌ INVALID HASH: {error_msg}")
+            self.terminal_buffer.append(f"Hash entered: {hash_value}")
+            self.terminal_buffer.append(f"Example valid {algorithm.value.upper()} hash:")
+            
+            # Show example for the algorithm
+            examples = {
+                HashAlgorithm.MD5: "5f4dcc3b5aa765d61d8327deb882cf99 (password: 'password')",
+                HashAlgorithm.SHA1: "5baa61e4c9b93f3f0682250b6cf8331b7ee68fd8 (password: 'password')",
+                HashAlgorithm.SHA256: "5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8 (password: 'password')",
+                HashAlgorithm.SHA512: "b109f3bbbc244eb82441917ed06d618b9008dd09b3befd1b5e07394c706a8bb980b1d7785e5976ec049b46df5f1326af5a2ea6d103fd07c95385ffab0cacbc86 (password: 'password')",
+                HashAlgorithm.NTLM: "8846f7eaee8fb117ad06bdd830b7586c (password: 'password')"
+            }
+            self.terminal_buffer.append(f"  {examples.get(algorithm, 'N/A')}")
+            self.terminal_buffer.append("="*50)
+            self.window['-OUTPUT-'].update('\n'.join(self.terminal_buffer[-100:]))
+            self.window['-CRACK-'].update(disabled=False)
+            return
         
         print(f"DEBUG: _run_attack started! Type: {attack_type}, Algorithm: {algorithm.value.upper()}, Hash: {hash_value[:16]}...")
         self.terminal_buffer.append(f">>> ATTACK STARTED: {attack_type.upper()} <<<")
         self.terminal_buffer.append(f"Algorithm: {algorithm.value.upper()}")
         self.terminal_buffer.append(f"Target Hash: {hash_value[:32]}...")
         self.terminal_buffer.append("="*50)
+        
+        # ✅ ROOT CAUSE FIX: Check if GPX is enabled
+        gpx_enabled = values.get('-GPX_ENABLED-', False)
+        gpx_mixed = values.get('-GPX_MIXED-', True)
+        
+        # Debug: Show what we detected
+        print(f"DEBUG: GPX checkbox value: {gpx_enabled}")
+        print(f"DEBUG: Hashcat wrapper exists: {self.hashcat_wrapper is not None}")
+        if self.hashcat_wrapper:
+            print(f"DEBUG: Hashcat path: {self.hashcat_wrapper.hashcat_path}")
+        print(f"DEBUG: GPU available: {self.gpx_manager.is_gpu_available()}")
+        
+        # Determine execution mode
+        use_gpx = (gpx_enabled and 
+                   self.hashcat_wrapper is not None and 
+                   self.hashcat_wrapper.hashcat_path is not None and 
+                   self.gpx_manager.is_gpu_available())
+        
+        print(f"DEBUG: Final use_gpx decision: {use_gpx}")
+        
+        # Show hashcat warning if GPU enabled but hashcat missing
+        if gpx_enabled and (not self.hashcat_wrapper or not self.hashcat_wrapper.hashcat_path):
+            self.terminal_buffer.append("⚠️ GPU ACCELERATION REQUESTED BUT HASHCAT NOT FOUND")
+            self.terminal_buffer.append("⚠️ Please install hashcat from: https://hashcat.net/hashcat/")
+            self.terminal_buffer.append("⚠️ See HASHCAT_INSTALL_GUIDE.md for instructions")
+            self.terminal_buffer.append("⚠️ Falling back to CPU mode...")
+            self.terminal_buffer.append("="*50)
+            # Note: Cannot show popup from thread, message shown in terminal instead
+        
+        if use_gpx:
+            device_info = self.gpx_manager.get_device_summary()
+            self.terminal_buffer.append(f"🚀 GPU ACCELERATION ENABLED")
+            self.terminal_buffer.append(f"Device: {device_info}")
+            self.terminal_buffer.append(f"Mixed Mode: {'ON' if gpx_mixed else 'OFF'}")
+            self.terminal_buffer.append("="*50)
+            print(f"DEBUG: Using GPU acceleration - {device_info}")
+            
+            # Route to GPU-accelerated attack
+            self._run_gpx_attack(hash_value, algorithm, attack_type, values, gpx_mixed)
+        else:
+            # Use CPU-only mode
+            if gpx_enabled and not self.gpx_manager.is_gpu_available():
+                self.terminal_buffer.append(f"⚠️ GPU requested but not available")
+            self.terminal_buffer.append(f"💻 CPU MODE")
+            self.terminal_buffer.append("="*50)
+            self._run_cpu_attack(hash_value, algorithm, attack_type, values)
+            print(f"DEBUG: Using CPU-only mode")
+            self._run_cpu_attack(hash_value, algorithm, attack_type, values)
+    
+    def _run_gpx_attack(self, hash_value: str, algorithm: HashAlgorithm, attack_type: str, values: Dict, mixed_mode: bool) -> None:
+        """Run GPU-accelerated attack using GPX engines."""
+        import time
+        
+        try:
+            if attack_type == 'dictionary':
+                print(f"DEBUG: Starting GPX dictionary attack")
+                
+                # Create GPX dictionary engine
+                engine = GPXDictionaryEngine(
+                    hash_value=hash_value,
+                    algorithm=algorithm,
+                    gpx_manager=self.gpx_manager,
+                    hashcat_wrapper=self.hashcat_wrapper
+                )
+                
+                # Get wordlist(s)
+                if values['-WORDLIST-'] == '*** TRY ALL WORDLISTS ***':
+                    wordlists = [
+                        'wordlists/common.txt',
+                        'wordlists/rockyou-lite.txt',
+                        'SecLists/Passwords/Common-Credentials/best110.txt',
+                        'SecLists/Passwords/Common-Credentials/best1050.txt',
+                        'SecLists/Passwords/Common-Credentials/10k-most-common.txt',
+                        'SecLists/Passwords/Common-Credentials/100k-most-used-passwords-NCSC.txt',
+                        'SecLists/Passwords/darkc0de.txt'
+                    ]
+                    self.terminal_buffer.append(">>> TRYING ALL WORDLISTS (GPU MODE) <<<")
+                else:
+                    wordlists = [values['-WORDLIST-']]
+                
+                total_attempts = 0
+                
+                # Try each wordlist with GPU
+                for wordlist_name in wordlists:
+                    if not self.attack_running:
+                        break
+                    
+                    self.terminal_buffer.append(f"\n=== GPU Processing: {wordlist_name.split('/')[-1]} ===")
+                    print(f"DEBUG: GPU processing wordlist: {wordlist_name}")
+                    
+                    try:
+                        # Run GPU-accelerated dictionary attack
+                        result = engine.attack(
+                            wordlist_file=wordlist_name,
+                            wordlist_manager=self.wordlist_manager,
+                            use_gpu=True,
+                            mixed_mode=mixed_mode,
+                            progress_callback=None  # Hashcat provides its own progress
+                        )
+                        
+                        total_attempts += engine.attempts
+                        self.attack_stats['attempts'] = total_attempts
+                        
+                        if result:
+                            # PASSWORD FOUND!
+                            print(f"DEBUG: GPX found password: {result}")
+                            self.terminal_buffer.append("")
+                            self.terminal_buffer.append("=" * 50)
+                            self.terminal_buffer.append(f"🎉 PASSWORD FOUND (GPU): {result}")
+                            self.terminal_buffer.append("=" * 50)
+                            
+                            self.attack_result = {
+                                'success': True,
+                                'password': result,
+                                'attempts': total_attempts,
+                                'duration': (datetime.now() - self.attack_stats['start_time']).total_seconds()
+                            }
+                            self.attack_running = False
+                            time.sleep(0.2)
+                            return
+                    
+                    except Exception as e:
+                        print(f"DEBUG: GPX wordlist failed: {e}")
+                        self.terminal_buffer.append(f"⚠️ GPU error for {wordlist_name}: {e}")
+                        continue
+                
+                # No match found
+                self.attack_result = {
+                    'success': False,
+                    'password': None,
+                    'attempts': total_attempts,
+                    'duration': (datetime.now() - self.attack_stats['start_time']).total_seconds(),
+                    'error': f'❌ Password not found (GPU mode) - tried {total_attempts:,} passwords'
+                }
+            
+            elif attack_type == 'bruteforce':
+                print(f"DEBUG: Starting GPX brute-force attack")
+                
+                # Mark as GPU attack in stats for pause/stop handling
+                self.attack_stats['use_gpu'] = True
+                
+                self.terminal_buffer.append(f"🔥 GPU BRUTE-FORCE ATTACK")
+                self.terminal_buffer.append(f"Mode: Incremental (starts at length 1, continues until found)")
+                self.terminal_buffer.append(f"Charset: All printable (a-zA-Z0-9 + symbols)")
+                self.terminal_buffer.append(f"Max length: 16 characters (can take hours/days for long passwords!)")
+                self.terminal_buffer.append(f"⚠️ This uses 100% GPU power - will run until password found")
+                self.terminal_buffer.append("="*50)
+                
+                # Create GPX brute-force engine
+                engine = GPXBruteforceEngine(
+                    hash_value=hash_value,
+                    algorithm=algorithm,
+                    gpx_manager=self.gpx_manager,
+                    hashcat_wrapper=self.hashcat_wrapper
+                )
+                
+                # Progress callback to show real-time attempts
+                last_update = [0]  # Use list to modify in nested function
+                
+                def progress_callback(update):
+                    """Handle real-time hashcat progress updates"""
+                    try:
+                        if update['type'] == 'candidate':
+                            # Show candidate range being tried
+                            candidate_info = update['info']
+                            self.terminal_buffer.append(f"🔍 Trying: {candidate_info}")
+                            # Keep buffer size reasonable
+                            if len(self.terminal_buffer) > 100:
+                                self.terminal_buffer.pop(0)
+                            # Update stats
+                            self.attack_stats['current_candidate'] = candidate_info
+                            print(f"DEBUG: Showing candidate: {candidate_info}")
+                            import sys
+                            sys.stdout.flush()
+                        
+                        elif update['type'] == 'progress':
+                            # Show progress stats (every update)
+                            attempts = update.get('attempts', 0)
+                            total = update.get('total', 0)
+                            speed = update.get('speed', 0)
+                            
+                            # Update attack stats ALWAYS
+                            self.attack_stats['attempts'] = attempts
+                            
+                            # Update terminal more frequently (every 50k attempts)
+                            if attempts - last_update[0] >= 50000 or attempts < 100000:
+                                if speed >= 1000000:
+                                    speed_str = f"{speed/1000000:.2f} MH/s"
+                                elif speed >= 1000:
+                                    speed_str = f"{speed/1000:.1f} kH/s"
+                                else:
+                                    speed_str = f"{speed:.0f} H/s"
+                                
+                                percent = (attempts / total * 100) if total > 0 else 0
+                                self.terminal_buffer.append(f"⚡ Progress: {attempts:,}/{total:,} ({percent:.1f}%) @ {speed_str}")
+                                if len(self.terminal_buffer) > 100:
+                                    self.terminal_buffer.pop(0)
+                                last_update[0] = attempts
+                                print(f"DEBUG: Progress update: {attempts:,} attempts @ {speed_str}")
+                                import sys
+                                sys.stdout.flush()
+                    except Exception as e:
+                        print(f"DEBUG: Progress callback error: {e}")
+                        import traceback
+                        traceback.print_exc()
+                
+                # Run GPU brute-force with incremental mode and real-time progress
+                # Mask ?a?a?a?a?a?a?a?a?a?a?a?a?a?a?a?a = 16 chars max, hashcat will try 1,2,3...16
+                result = engine.attack(
+                    mask='?a?a?a?a?a?a?a?a?a?a?a?a?a?a?a?a',  # 16 positions, incremental tries 1-16
+                    use_gpu=True,
+                    mixed_mode=mixed_mode,
+                    progress_callback=progress_callback  # NOW WITH REAL-TIME UPDATES!
+                )
+                
+                if result:
+                    # PASSWORD FOUND!
+                    print(f"DEBUG: GPX brute-force found password: {result}")
+                    self.terminal_buffer.append("")
+                    self.terminal_buffer.append("=" * 50)
+                    self.terminal_buffer.append(f"🎉 PASSWORD FOUND (GPU BRUTE-FORCE): {result}")
+                    self.terminal_buffer.append(f"   Length: {len(result)} characters")
+                    self.terminal_buffer.append("=" * 50)
+                    
+                    self.attack_result = {
+                        'success': True,
+                        'password': result,
+                        'attempts': engine.attempts,
+                        'duration': (datetime.now() - self.attack_stats['start_time']).total_seconds()
+                    }
+                else:
+                    # Password not found (exhausted search space)
+                    attempts = engine.attempts  # Get actual attempts from hashcat stats
+                    self.terminal_buffer.append("")
+                    self.terminal_buffer.append("=" * 50)
+                    self.terminal_buffer.append("❌ PASSWORD NOT FOUND")
+                    self.terminal_buffer.append(f"Mode: Incremental brute-force (lengths 1-16)")
+                    self.terminal_buffer.append(f"Charset: All printable characters (a-zA-Z0-9 + symbols)")
+                    self.terminal_buffer.append(f"Total attempts: {attempts:,}")
+                    self.terminal_buffer.append(f"Password is either:")
+                    self.terminal_buffer.append(f"  • Longer than 16 characters")
+                    self.terminal_buffer.append(f"  • Uses non-printable characters")
+                    self.terminal_buffer.append(f"  • Different encoding (unicode, etc.)")
+                    self.terminal_buffer.append("💡 Try: Use wordlist attack")
+                    self.terminal_buffer.append("=" * 50)
+                    
+                    self.attack_result = {
+                        'success': False,
+                        'password': None,
+                        'attempts': attempts,  # Use actual attempts
+                        'duration': (datetime.now() - self.attack_stats['start_time']).total_seconds(),
+                        'error': f'❌ Password not found after {attempts:,} GPU attempts (incremental 1-8 chars)'
+                    }
+                
+                self.attack_running = False
+            
+        except Exception as e:
+            print(f"DEBUG: GPX attack exception: {e}")
+            import traceback
+            error_details = traceback.format_exc()
+            print(f"DEBUG: Full traceback:\n{error_details}")
+            traceback.print_exc()
+            
+            # Show detailed error in terminal
+            self.terminal_buffer.append("")
+            self.terminal_buffer.append("=" * 50)
+            self.terminal_buffer.append("❌ ATTACK ERROR")
+            self.terminal_buffer.append(str(e))
+            self.terminal_buffer.append("=" * 50)
+            
+            self.attack_result = {
+                'success': False,
+                'password': None,
+                'attempts': self.attack_stats.get('attempts', 0),
+                'duration': (datetime.now() - self.attack_stats['start_time']).total_seconds(),
+                'error': f'❌ GPU attack error: {str(e)}'
+            }
+            self.attack_running = False
+    
+    def _run_cpu_attack(self, hash_value: str, algorithm: HashAlgorithm, attack_type: str, values: Dict) -> None:
+        """Run CPU-only attack (fallback mode)."""
+        import time
+        import itertools
+        import string
         
         try:
             if attack_type == 'dictionary':
@@ -794,6 +1152,14 @@ Use the buttons above to generate JSON, HTML, or TXT reports.
         """Stop the running attack."""
         if self.attack_running:
             self.attack_running = False
+            
+            # Try to stop hashcat process if GPU attack is running
+            if hasattr(self, 'hashcat_wrapper') and self.hashcat_wrapper:
+                stopped = self.hashcat_wrapper.stop_attack()
+                if stopped:
+                    self.log_message(window, "GPU attack stopped - hashcat process terminated")
+                    self.terminal_buffer.append(">>> HASHCAT PROCESS TERMINATED <<<")
+            
             self.log_message(window, "Attack stopped by user")
             window['-STATUS-'].update("⏹ STOPPED")
             window['-STATUSBAR-'].update("Attack stopped")
@@ -802,6 +1168,21 @@ Use the buttons above to generate JSON, HTML, or TXT reports.
     def handle_pause_attack(self, window: sg.Window) -> None:
         """Pause the running attack."""
         if self.attack_running:
+            # Check if GPU attack is running
+            attack_type = self.attack_stats.get('attack_type', '')
+            use_gpu = self.attack_stats.get('use_gpu', False)
+            
+            if use_gpu or (attack_type == 'bruteforce' and hasattr(self, 'hashcat_wrapper')):
+                # GPU attacks cannot be paused (hashcat limitation)
+                sg.popup_warning(
+                    "GPU attacks cannot be paused!\n\n"
+                    "Hashcat (GPU engine) doesn't support pause/resume.\n\n"
+                    "You can only STOP the attack completely.\n\n"
+                    "Use the STOP button to terminate the attack.",
+                    title="Pause Not Supported"
+                )
+                return
+            
             self.attack_paused = True
             self.log_message(window, "Attack paused")
             window['-STATUS-'].update("⏸ PAUSED")
@@ -916,6 +1297,164 @@ Use the buttons above to generate JSON, HTML, or TXT reports.
             daemon=True
         )
         self.attack_thread.start()
+    
+    def handle_gpx_benchmark(self, window: sg.Window, values: Dict) -> None:
+        """Handle GPX benchmark request."""
+        if not self.gpx_manager.is_gpu_available():
+            response = sg.popup_yes_no(
+                "No GPU detected!\n\n"
+                "Benchmark will only test CPU performance.\n\n"
+                "Continue anyway?",
+                title="No GPU Detected"
+            )
+            if response != "Yes":
+                return
+        
+        # Get selected algorithm
+        algo_name = values['-ALGO-']
+        hash_mode = HashcatMode.from_algorithm(HashAlgorithm[algo_name])
+        
+        # Show progress
+        sg.popup_quick_message("Running benchmark... This may take 5-10 seconds", 
+                              auto_close_duration=2, background_color='blue')
+        
+        # Run benchmarks
+        results = []
+        errors = []
+        
+        # Benchmark GPU (if available)
+        if self.gpx_manager.is_gpu_available():
+            best_gpu = self.gpx_manager.get_best_device()
+            print(f"DEBUG: Benchmarking GPU: {best_gpu.name}")
+            gpu_speed = self.gpx_manager.benchmark_device(best_gpu, hash_mode, duration_seconds=5)
+            if gpu_speed > 0:
+                results.append(("GPU", best_gpu.name, gpu_speed))
+            else:
+                errors.append(f"GPU benchmark failed for {best_gpu.name}")
+        
+        # Benchmark CPU
+        cpu_device = self.gpx_manager.get_cpu_device()
+        if cpu_device:
+            print(f"DEBUG: Benchmarking CPU: {cpu_device.name}")
+            cpu_speed = self.gpx_manager.benchmark_device(cpu_device, hash_mode, duration_seconds=5)
+            if cpu_speed > 0:
+                results.append(("CPU", cpu_device.name, cpu_speed))
+            else:
+                errors.append(f"CPU benchmark failed")
+        
+        # Check if we got any results
+        if not results:
+            error_msg = "Benchmark failed!\n\n"
+            error_msg += "\n".join(errors) if errors else "No devices could be benchmarked"
+            error_msg += "\n\nCheck the terminal for detailed debug output."
+            sg.popup_error(error_msg, title="Benchmark Failed")
+            return
+        
+        # Calculate speedup
+        speedup_text = ""
+        if len(results) == 2:
+            gpu_speed = results[0][2]
+            cpu_speed = results[1][2]
+            if cpu_speed > 0:
+                speedup = gpu_speed / cpu_speed
+                speedup_text = f"\n\n🚀 GPU Speedup: {speedup:.1f}× faster than CPU"
+                if speedup >= 4:
+                    speedup_text += "\n✅ GPX recommended - significant acceleration"
+                elif speedup >= 2:
+                    speedup_text += "\n✅ GPX recommended - moderate acceleration"
+                else:
+                    speedup_text += f"\n⚠️ Note: {algo_name} may be GPU-resistant (slow hashing)"
+        
+        # Format output
+        output = f"BENCHMARK RESULTS - {algo_name}\n" + "=" * 60 + "\n\n"
+        for device_type, device_name, speed in results:
+            formatted_speed = self.gpx_manager.format_hash_rate(speed)
+            output += f"{device_type}: {device_name}\n"
+            output += f"  Speed: {formatted_speed}\n\n"
+        
+        output += speedup_text
+        
+        # Add errors if any
+        if errors:
+            output += "\n\n" + "=" * 60 + "\n⚠️ WARNINGS:\n"
+            output += "\n".join(f"  • {err}" for err in errors)
+        
+        # Update UI with estimated speed
+        if results:
+            best_speed = max(r[2] for r in results)
+            formatted = self.gpx_manager.format_hash_rate(best_speed)
+            window['-GPX_SPEED_EST-'].update(f"Estimated Speed: {formatted} ({algo_name})")
+            window['-GPX_SPEED_EST-'].update(visible=True)
+        
+        sg.popup_scrolled(output, title="GPX Benchmark Results", size=(70, 20))
+    
+    def handle_gpx_rescan(self, window: sg.Window) -> None:
+        """Handle device rescan request."""
+        sg.popup_quick_message("Scanning devices...", auto_close_duration=1, background_color='blue')
+        
+        try:
+            self.gpx_manager.detect_devices(force_rescan=True)
+            
+            # Update UI
+            device_summary = self.gpx_manager.get_device_summary()
+            window['-GPX_DEVICE_INFO-'].update(device_summary)
+            
+            # Update color based on GPU availability (keep black if detected, gray if not)
+            if self.gpx_manager.is_gpu_available():
+                window['-GPX_DEVICE_INFO-'].update(text_color='black')
+                window['-GPX_ENABLED-'].update(disabled=False)
+                sg.popup_ok(f"✅ Devices detected:\n\n{device_summary}", title="GPX Device Scan")
+            else:
+                window['-GPX_DEVICE_INFO-'].update(text_color='gray')
+                window['-GPX_ENABLED-'].update(disabled=True, value=False)
+                sg.popup_ok("⚠️ No GPU detected. CPU mode will be used.", title="GPX Device Scan")
+        
+        except Exception as e:
+            sg.popup_error(f"Device scan failed: {e}")
+    
+    def handle_gpx_diagnostics(self, window: sg.Window) -> None:
+        """Show detailed GPU/CPU diagnostics."""
+        try:
+            # Get detailed diagnostic info
+            diag_info = self.gpx_manager.get_detailed_device_info()
+            
+            # Create diagnostics window
+            layout = [
+                [sg.Text("GPU/CPU Detection Diagnostics", font=("Arial", 12, "bold"))],
+                [sg.HorizontalSeparator()],
+                [sg.Multiline(diag_info, size=(80, 30), font=("Courier New", 9), 
+                             disabled=True, autoscroll=True)],
+                [sg.HorizontalSeparator()],
+                [sg.Button("Copy to Clipboard", size=(15, 1)), 
+                 sg.Button("Rescan", size=(15, 1)),
+                 sg.Button("Close", size=(15, 1))]
+            ]
+            
+            diag_window = sg.Window("GPX Diagnostics", layout, modal=True, finalize=True)
+            
+            while True:
+                event, values = diag_window.read()
+                
+                if event in (sg.WIN_CLOSED, "Close"):
+                    break
+                elif event == "Copy to Clipboard":
+                    sg.clipboard_set(diag_info)
+                    sg.popup_quick_message("✅ Copied to clipboard!", auto_close_duration=1)
+                elif event == "Rescan":
+                    sg.popup_quick_message("Rescanning...", auto_close_duration=1, background_color='blue')
+                    self.gpx_manager.detect_devices(force_rescan=True)
+                    new_diag_info = self.gpx_manager.get_detailed_device_info()
+                    diag_window['-ML-'].update(new_diag_info) if '-ML-' in values else None
+                    # Update the multiline text
+                    for element in diag_window.element_list():
+                        if isinstance(element, sg.Multiline):
+                            element.update(new_diag_info)
+                            break
+            
+            diag_window.close()
+            
+        except Exception as e:
+            sg.popup_error(f"Failed to show diagnostics: {e}")
     
     def show_hash_generator(self) -> None:
         """Show hash generator window."""
